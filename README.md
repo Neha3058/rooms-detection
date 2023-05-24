@@ -1,5 +1,7 @@
 # rooms-detection
 
+The code is done using R markdown.
+
 **Dataset**
 
 The data contains images concerning different indoor scenes from rooms and locations commonly present in a standard family home. The task is to predict the type of room/scene present in the image. Indoor scene recognition is a challenging problem since some indoor scenes can be well defined by global spatial and structural proper- ties, while others are better characterized by the objects included in the space. The dataset is a subset of a larger dataset for indoor scene recognition. More information is available here:
