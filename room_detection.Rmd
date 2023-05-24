@@ -1,0 +1,621 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## The task is to build a predictive model to predict the type of indoor scene from the image data.             1. Deploy at least 4 different deep learning systems characterized by different configurations, hyperparameters, and training settings (architecture, number of hidden units, regularization, kernel size, filter size, optimization, etc.). These deep learning systems can be of the same type, for example 4 different DNNs characterized by different architectures and settings, or of different types, for example 2 DNNs and 2 CNNs with different settings. Motivate clearly the choices made in relation to the settings, configurations, and hyperparameteres used to define the different deep learning systems.
+
+
+```{r}
+# Load required packages
+library(keras)
+library(tensorflow)
+library(reticulate)
+library(jpeg)
+```
+
+We set the target size to which all images will be rescaled (in pixels)
+
+```{r}
+# Encode the images in numerical RGB tensors of width/height of 64 × 64.
+width <- 64
+height<- 64
+target_size <- c(width, height)
+
+#color channels
+rgb <- 3 
+```
+
+
+We will set the path of training data from where the images will load. An image is encoded in the three color channels with values of [0-255], so we normalize the values in [0-1]. We will use the image_data_generator() function to scale the images. 
+
+```{r}
+# Set path of training data
+path_train <- "data_indoor/train/"
+
+# Set labels
+labels_li <- dir("data_indoor/train/")
+
+#Scale the training images
+train_data <- image_data_generator(rescale = 1/255)
+
+train_images <- flow_images_from_directory(path_train,
+  train_data,
+  target_size = target_size,
+  batch_size = 50,
+  class_mode = "categorical")
+  #shuffle = T)
+```
+
+
+```{r}
+# Set the validation path
+path_val <- "data_indoor/validation/"
+
+#Scale the validation images
+val_data <- image_data_generator(rescale = 1/255)
+
+validation_images <- flow_images_from_directory(
+path_val,
+val_data,
+target_size = target_size,
+batch_size = 50,
+class_mode = "categorical"
+)
+
+```
+
+### CNN - 1
+
+We specify a CNN with 3 convolution layers, interleaved by 3 max-pooling layers and then followed by 2 fully connected layers. The first convolution layer is set with 128 filters and a 3 × 3 kernel with strides 1 (default).
+
+The following 3 convolution layers are set with 128 filters, with 3 × 3 kernels. All max-pooling layers have a pool size of 2 × 2, thus halving width and height at every pass. In the fully connected layers, we added weight decay regularization. 
+
+Since we are dealing with multi-class classification, activation function of output function is softmax.
+
+```{r}
+## CNN model
+
+model <- keras_model_sequential() %>%
+#
+# convolutional layers
+layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu",
+input_shape = c(64, 64, 3)) %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+
+# fully connected layers
+layer_flatten() %>%
+  #layer_batch_normalization() %>%
+layer_dense(units = 64, activation = "relu",kernel_regularizer = regularizer_l2(0.1)) %>%
+layer_dense(units = 10, activation = "softmax") %>%
+
+# compile
+compile(
+loss = "categorical_crossentropy",
+metrics = "accuracy",
+optimizer = optimizer_adam())
+
+```
+
+We will specify the argument 'steps_per_epoch', which tells after how many batches drawn from the generator the fitting process will move to the next epoch. This is to inform generator to draw the number of samples before an epoch. Here, batches include 50 samples each, so it will take 35 batches to cover the total of 1713 samples of the training data. 
+
+We will also pass the validation data generator in the argument validation_data. Since also for the validation set we use a generator we need also to specify the validation_steps to tell the process how many batches to draw from the validation generator for evaluation.
+
+To summarise: 
+
+Steps should be smaller than or equal to length of your dataset / batch size.
+For example:
+
+Your dataset has 1000 images and batch size is 1 --steps 1000
+Your dataset has 1000 images and batch size is 2 --steps 500
+
+
+```{r,results='hide'}
+# Fit the model
+fit <- model %>% fit(
+train_images,
+steps_per_epoch = 35,
+epochs = 40,
+validation_data = validation_images,
+validation_steps = 18
+)
+```
+
+```{r,warning=FALSE}
+# Save the entire model as a SavedModel.
+save_model_tf(model, "saved_model/model")
+```
+
+We will plot the model to check the training and predictive performance. We also extract training and validation metrics at convergence.
+
+### Loss vs Epochs Plot
+
+```{r}
+# to add a smooth line to points
+smooth_line <- function(y) {
+x <- 1:length(y)
+out <- predict( loess(y ~ x) )
+return(out)
+}
+
+# check learning curves
+cols <- c("black", "dodgerblue3")
+out <- cbind(fit$metrics$loss,
+fit$metrics$val_loss,
+fit$metrics$accuracy,
+fit$metrics$val_accuracy)
+
+# loss
+matplot(out[,1:2], pch = 19, ylab = "Loss", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0, 3))
+matlines(apply(out[,1:2], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("topright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+```
+
+There is a significant decrease in training Loss around 1 while validation loss is upto 2.5.
+
+### Accuracy vs Epochs Plot
+
+```{r}
+# accuracy
+matplot(out[,3:4], pch = 19, ylab = "Accuracy", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0.3, 1))
+matlines(apply(out[,3:4], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("bottomright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+
+```
+
+Training accuracy is good around 0.8 and validation accuracy is around 0.4.
+
+The model is already over-fitting, i.e. validation value accuracy increases for few epochs and then is constant throughout while training accuracy further increases. The model is an average fit, as the training loss is around 1. The training process is also stable.
+
+Now we will try to check the performance by adding one more layer and adding batch normalization and a regularizer to the previous cnn model.
+
+### CNN - 2 
+
+Previous model had 3 convolution layers which might be the reason for high training and validation loss. With the increase in the number of layers, the features extracted will be more specific. This can be done by adding more layers before the fully connected layer.
+
+We specify a CNN with 4 convolution layers, interleaved by 4 max-pooling layers and then followed by 2 fully connected layers. The first convolution layer is set with 128 filters and a 3 × 3 kernel with strides 1 (default).
+
+The following 3 convolution layers are set with 64,128,32 filters, with 3 × 3 kernels. All max-pooling layers have a pool size of 2 × 2. In the fully connected layers, we added batch normalization and weight decay regularization. 
+
+Since we are dealing with multi-class classification, activation function of output function is softmax.
+
+```{r,warning=FALSE}
+# Create a sequential model
+model2 <- keras_model_sequential()%>%
+
+layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu",
+input_shape = c(64, 64, 3)) %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+
+
+# fully connected layers
+layer_flatten() %>%
+layer_batch_normalization() %>%
+layer_dense(units = 64, activation = "relu",kernel_regularizer = regularizer_l2(0.1)) %>%
+layer_dense(units = 10, activation = "softmax")%>%
+
+compile(
+loss = "categorical_crossentropy",
+metrics = "accuracy",
+optimizer = optimizer_adam())
+
+```
+
+
+```{r,results='hide',warning=FALSE}
+# Train the model
+fit2 <- model2 %>%
+  fit_generator(
+    generator = train_images,
+    steps_per_epoch = 35,
+    epochs = 40,
+    validation_data = validation_images,
+    validation_steps = 18
+  )
+```
+
+
+```{r,warning=FALSE}
+# Save the entire model as a SavedModel.
+save_model_tf(model2, "saved_model/model2")
+```
+
+Now we will plot the model to understand the fit more clearly.
+
+### Loss vs Epochs Plot
+
+```{r}
+# to add a smooth line to points
+smooth_line <- function(y) {
+x <- 1:length(y)
+out2 <- predict( loess(y ~ x) )
+return(out2)
+}
+
+# check learning curves
+cols <- c("black", "dodgerblue3")
+out2 <- cbind(fit2$metrics$loss,
+fit2$metrics$val_loss,
+fit2$metrics$accuracy,
+fit2$metrics$val_accuracy)
+
+# loss
+matplot(out2[,1:2], pch = 19, ylab = "Loss", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0, 3))
+matlines(apply(out2[,1:2], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("topright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+```
+
+### Accuracy Plot
+
+```{r}
+# accuracy
+matplot(out2[,3:4], pch = 19, ylab = "Accuracy", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0.3, 1))
+matlines(apply(out2[,3:4], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("bottomright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+
+```
+
+Training accuracy is good around 0.8 and validation accuracy is around 0.4.
+
+The model is already over-fitting, i.e. validation value accuracy increases for few epochs and then is constant throughout while training accuracy further increases. The model is an average fit, as the training loss is around 1. The training process is also stable.
+
+#### CNN -3 
+
+Previous model had 3 convolution layers which might be the reason for high training and validation loss. With the increase in the number of layers, the features extracted will be more specific. This can be done by adding more layers before the fully connected layer.
+
+We specify a CNN with 4 convolution layers, interleaved by 4 max-pooling layers and then followed by 2 fully connected layers. The first convolution layer is set with 128 filters and a 3 × 3 kernel with strides 1 (default).
+
+The following 3 convolution layers are set with 64,128,32 filters, with 3 × 3 kernels. All max-pooling layers have a pool size of 2 × 2. In the fully connected layers, we added batch normalization and weight decay regularization. 
+
+Since we are dealing with multi-class classification, activation function of output function is softmax.
+
+```{r,warning=FALSE}
+# Create a sequential model
+model3 <- keras_model_sequential()%>%
+
+# Add convolutional layers
+layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu",
+input_shape = c(64, 64, 3)) %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 32 , kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+
+
+
+# fully connected layers
+layer_flatten() %>%
+layer_batch_normalization() %>%
+layer_dense(units = 64, activation = "relu" ,kernel_regularizer = regularizer_l2(0.1)) %>%
+layer_dropout(rate = 0.1) %>%
+layer_dense(units = 10, activation = "softmax")%>%
+
+compile(
+loss = "categorical_crossentropy",
+metrics = "accuracy",
+optimizer = optimizer_adam())
+```
+
+
+```{r,results='hide',warning=FALSE}
+# Train the model
+fit3 <- model3 %>%
+  fit_generator(
+    train_images,
+    steps_per_epoch = 35,
+    epochs = 40,
+    validation_data = validation_images,
+    validation_steps = 18
+  )
+```
+
+
+```{r,warning=FALSE}
+# Save the entire model
+save_model_tf(model3, "saved_model/model3")
+```
+
+### Loss vs Epochs Plot
+
+```{r}
+# to add a smooth line to points
+smooth_line <- function(y) {
+x <- 1:length(y)
+out3 <- predict( loess(y ~ x) )
+return(out3)
+}
+
+# check learning curves
+cols <- c("black", "dodgerblue3")
+out3 <- cbind(fit3$metrics$loss,
+fit3$metrics$val_loss,
+fit3$metrics$accuracy,
+fit3$metrics$val_accuracy)
+
+# loss
+matplot(out3[,1:2], pch = 19, ylab = "Loss", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0, 3))
+matlines(apply(out3[,1:2], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("topright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+```
+
+### Accuracy vs Epochs Plot
+
+```{r}
+# accuracy
+matplot(out2[,3:4], pch = 19, ylab = "Accuracy", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0.3, 1))
+matlines(apply(out2[,3:4], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("bottomright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+
+```
+
+Training accuracy is good around 0.8 and validation accuracy is around 0.4.
+
+The model is already over-fitting, i.e. validation value accuracy increases for few epochs and then is constant throughout while training accuracy further increases. The model is an average fit, as the training loss is around 1. The training process is also stable.
+
+### CNN- 4 (Augmentation)
+
+Previous model had 3 convolution layers which might be the reason for high training and validation loss. With the increase in the number of layers, the features extracted will be more specific. This can be done by adding more layers before the fully connected layer.
+
+We specify a CNN with 4 convolution layers, interleaved by 4 max-pooling layers and then followed by 2 fully connected layers. The first convolution layer is set with 128 filters and a 3 × 3 kernel with strides 1 (default).
+
+The following 3 convolution layers are set with 64,128,32 filters, with 3 × 3 kernels. All max-pooling layers have a pool size of 2 × 2. In the fully connected layers, we added batch normalization and weight decay regularization. 
+
+Since we are dealing with multi-class classification, activation function of output function is softmax.
+
+```{r}
+# set our data augmentation generator
+data_augment <- image_data_generator(
+rescale = 1/255,
+rotation_range = 40,
+width_shift_range = 0.2,
+height_shift_range = 0.2,
+shear_range = 0.2,
+zoom_range = 0.2,
+horizontal_flip = TRUE,
+fill_mode = "nearest"
+)
+
+# train data generator with data augmentation
+train_generator <- flow_images_from_directory(
+path_train,
+data_augment,
+target_size = target_size,
+batch_size = 50,
+class_mode = "categorical"
+)
+
+```
+
+
+```{r}
+## CNN model
+
+model_aug <- keras_model_sequential() %>%
+#
+# convolutional layers
+layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu",
+input_shape = c(64, 64, 3)) %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+#layer_conv_2d(filters = 8, kernel_size = c(3, 3), activation = "relu") %>%
+#layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+
+# fully connected layers
+layer_flatten() %>%
+  #layer_batch_normalization() %>%
+layer_dense(units = 64, activation = "relu")%>%#,kernel_regularizer = regularizer_l2(0.1)) %>%
+  #layer_dropout(0.1)%>%
+layer_dense(units = 10, activation = "softmax") %>%
+
+# compile
+compile(
+loss = "categorical_crossentropy",
+metrics = "accuracy",
+optimizer = optimizer_adam())
+
+```
+
+```{r,results='hide',warning=FALSE}
+# Train the model
+fit_aug <- model_aug %>%
+  fit_generator(
+    train_generator,
+    steps_per_epoch = 35,
+    epochs = 40,
+    validation_data = validation_images,
+    validation_steps = 18
+  )
+```
+
+
+```{r,warning=FALSE}
+# Save the entire model as a SavedModel.
+save_model_tf(model_aug, "saved_model/model_aug")
+```
+
+
+### Loss vs Epochs Plot
+
+```{r}
+# to add a smooth line to points
+smooth_line <- function(y) {
+x <- 1:length(y)
+out4 <- predict( loess(y ~ x) )
+return(out4)
+}
+
+# check learning curves
+cols <- c("black", "dodgerblue3")
+out4 <- cbind(fit_aug$metrics$loss,
+fit_aug$metrics$val_loss,
+fit_aug$metrics$accuracy,
+fit_aug$metrics$val_accuracy)
+
+# loss
+matplot(out4[,1:2], pch = 19, ylab = "Loss", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0, 3))
+matlines(apply(out4[,1:2], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("topright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+```
+
+### Accuracy vs Epochs Plot
+
+```{r}
+# accuracy
+matplot(out4[,3:4], pch = 19, ylab = "Accuracy", xlab = "Epochs",
+col = adjustcolor(cols, 0.3), ylim = c(0.3, 1))
+matlines(apply(out4[,3:4], 2, smooth_line), lty = 1, col = cols, lwd = 2)
+legend("bottomright", legend = c("Training", "Validation"),
+fill = cols, bty = "n")
+
+```
+
+Training accuracy is good around 0.8 and validation accuracy is around 0.4.
+
+The model is already over-fitting, i.e. validation value accuracy increases for few epochs and then is constant throughout while training accuracy further increases. The model is an average fit, as the training loss is around 1. The training process is also stable.
+
+
+## 2. Compare appropriately the deep learning systems considered, evaluating and discussing their relative merits. Comment on their training and predictive performance, and select the best model a predicting the type of indoor scene from the data.
+
+
+```{r}
+library(tidyverse)
+
+# Calculate train loss and accuracy of each model
+score1 <- model %>% evaluate(train_images, labels_li)
+score2 <- model2 %>% evaluate(train_images, labels_li)
+score3 <- model3 %>% evaluate(train_images, labels_li)
+score4 <- model_aug %>% evaluate(train_images, labels_li)
+```
+
+
+```{r}
+# Dataframe to store accuracy of respective models
+df <- data.frame(Models=c('Model1','Model2','Model3','Model4'),
+                 Loss=c(score1["loss"],score2["loss"],score3["loss"],score4["loss"]))
+
+# Create a bar plot of Loss values
+loss_plot <- ggplot(df, aes(x = Models, y = Loss)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
+  labs(x = "Model", y = "Loss") +
+  ggtitle("Loss of CNN Models") +
+  theme_minimal()
+
+# Show the plot
+print(loss_plot)
+
+```
+
+
+```{r}
+# Dataframe to store accuracy of respective models
+df2 <- data.frame(Models=c('Model1','Model2','Model3','Model4'),
+                 Accuracy=c(score1["accuracy"],score2["accuracy"],score3["accuracy"],score4["accuracy"]))
+
+# Create a bar plot of accuracy values
+accuracy_plot <- ggplot(df2, aes(x = Models, y = Accuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
+  labs(x = "Model", y = "Accuracy") +
+  ggtitle("Accuracy of CNN Models") +
+  theme_minimal()
+
+# Show the plot
+print(accuracy_plot)
+```
+
+
+## 3. Use the test data to evaluate the predictive performance of the best model. Comment on the ability of the model at recognizing the different scenes.
+
+
+```{r}
+path_test <- "data_indoor/test/"
+test_data <- image_data_generator(rescale = 1/255)
+test_images <- flow_images_from_directory(path_test,
+   test_data,
+   target_size = target_size,
+   class_mode = "categorical",
+   batch_size = 18)
+```
+
+
+```{r}
+# test performance
+model2 %>% evaluate(test_images, labels_li, verbose = 0)
+```
+
+
+```{r}
+# Generate predictions on the test set
+test_pred <- predict(model2, test_images)
+
+# Convert predicted probabilities to class labels
+test_pred_labels <- apply(test_pred, 1, which.max)
+
+# Create a confusion matrix
+#confusion_matrix <- table(test_pred, labels_li)
+#confusion_matrix
+```
+
+```{r}
+# Load the library for confusion matrix
+library(caret)
+
+cm = confusionMatrix(
+  factor(test_images$classes, levels = 1:10),
+  factor(test_pred_labels, levels = 1:10))
+
+cm
+```
+
+
+```{r}
+## Testing on one image
+test_image1 <- image_load("data_indoor/test/bathroom/008.jpg",
+                                  target_size = target_size)
+
+x <- image_to_array(test_image1)
+x <- array_reshape(x, c(1, dim(x)))
+x <- x/255
+
+pred <- model2 %>% predict(x)
+pred <- data.frame("Room" = labels_li, "Probability" = t(pred))
+pred <- pred[order(pred$Probability, decreasing=T),][1:5,]
+pred$Probability <- paste(format(100*pred$Probability,2),"%")
+pred
+```
+
+
+
+
+
+
+
